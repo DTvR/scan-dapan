@@ -74,7 +74,24 @@ body{
   position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
   background:rgba(5,7,15,.72);color:#dbe2f5;font-size:12px;padding:7px 14px;border-radius:999px;
   white-space:nowrap;backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.12);
+  z-index:4;
 }
+.cam-answer{
+  position:absolute;left:12px;right:12px;bottom:48px;z-index:5;
+  display:none;align-items:center;gap:12px;
+  background:rgba(22,6,10,.86);border:2px solid var(--red);border-radius:16px;
+  padding:11px 13px;backdrop-filter:blur(10px);
+  box-shadow:0 12px 34px rgba(0,0,0,.55);
+}
+.cam-answer.show{display:flex;animation:pop .25s ease}
+.ca-letter{
+  width:54px;height:54px;border-radius:14px;background:var(--red);color:#fff;
+  font-size:30px;font-weight:800;display:flex;align-items:center;justify-content:center;flex:none;
+  box-shadow:0 8px 20px rgba(255,77,90,.45);
+}
+.ca-title{font-size:10.5px;font-weight:700;color:var(--red);letter-spacing:.8px;text-transform:uppercase}
+.ca-text{font-size:13px;color:#fff;line-height:1.4;font-weight:600;margin-top:2px}
+.ca-note{font-size:11px;color:#c9b3b6;margin-top:3px}
 .cam-empty{
   position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
   color:var(--muted);text-align:center;padding:24px;
@@ -228,6 +245,14 @@ body{
         <video id="cam" playsinline muted autoplay></video>
         <div class="cam-frame" id="camFrame"></div>
         <div class="cam-hint" id="camHint">Đưa câu hỏi vào khung — quét tự động</div>
+        <div class="cam-answer" id="camAnswer">
+          <div class="ca-letter" id="caLetter">C</div>
+          <div>
+            <div class="ca-title">Đáp án đúng</div>
+            <div class="ca-text" id="caText"></div>
+            <div class="ca-note" id="caNote"></div>
+          </div>
+        </div>
         <div class="cam-empty" id="camEmpty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
           <p><b>Bật camera</b> để quét tự động<br>hoặc chọn ảnh từ thư viện</p>
@@ -336,22 +361,61 @@ function optRow(o, ans){
   return '<div class="rop' + (ok ? " ok" : "") + '"><b>' + o.k + '</b><span>' + esc(o.t) +
     (ok ? '</span><span class="tick">ĐÚNG</span>' : "</span>");
 }
-function resultCard(m){
+function simScore(aTokens, bTokens){
+  if (!aTokens.length || !bTokens.length) return 0;
+  var set = {};
+  bTokens.forEach(function(w){ set[w] = true; });
+  var hit = 0;
+  aTokens.forEach(function(w){ if (set[w]) hit++; });
+  return 0.65 * (hit / aTokens.length) + 0.35 * (hit / bTokens.length);
+}
+function parsePaperOptions(text){
+  var lines = String(text || "").split(/\r?\n/).map(function(l){ return l.trim(); }).filter(Boolean);
+  var opts = [], cur = null;
+  for (var i = 0; i < lines.length; i++){
+    var m = lines[i].match(/^([A-Da-d])[\.\)\s]\s*(.+)$/);
+    if (m){
+      if (cur) opts.push(cur);
+      cur = { letter: m[1].toUpperCase(), text: m[2] };
+    } else if (cur){
+      cur.text += " " + lines[i];
+    }
+  }
+  if (cur) opts.push(cur);
+  return opts;
+}
+function paperLetterFor(ocrText, correctText){
+  var opts = parsePaperOptions(ocrText);
+  if (!opts.length) return null;
+  var ct = tokens(correctText);
+  var best = null, bestScore = 0;
+  opts.forEach(function(o){
+    var s = simScore(tokens(o.text), ct);
+    if (s > bestScore){ bestScore = s; best = o.letter; }
+  });
+  return bestScore >= 0.3 ? best : null;
+}
+function resultCard(m, paperLetter){
   var q = m.q;
   var conf = Math.round(m.score * 100);
   var ansOpt = q.opts.filter(function(o){ return o.k === q.ans; })[0] || { t: "" };
   var gr = GROUPS.filter(function(g){ return g.num === q.g; })[0] || { name: "Nhóm " + q.g };
   var mnem = q.mn ? '<div class="mnem">Mẹo: ' + esc(q.mn) + '</div>' : "";
+  var letter = paperLetter || q.ans;
+  var note = paperLetter && paperLetter !== q.ans
+    ? '<div class="ans-sub"><span class="chip">Trên đề chọn ' + paperLetter + ' · Đáp án gốc ' + q.ans + '</span></div>'
+    : "";
   var card = el(
     '<div class="card result">' +
       '<div class="ans-big">' +
-        '<div class="ans-letter">' + esc(q.ans) + '</div>' +
+        '<div class="ans-letter">' + esc(letter) + '</div>' +
         '<div>' +
           '<div class="ans-text">' + esc(ansOpt.t) + '</div>' +
           '<div class="ans-sub">' +
             '<span class="chip">Câu #' + q.idx + ' &middot; ' + esc(gr.name) + '</span>' +
             '<span class="chip">Độ khớp ' + conf + '%</span>' +
           '</div>' +
+          note +
         '</div>' +
       '</div>' +
       '<button class="explain-btn"><span>Giải thích</span><svg class="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>' +
@@ -503,6 +567,27 @@ function setScanStatus(text, state){
   $("scanStatusText").textContent = text;
 }
 
+function renderScanAnswer(m, paperLetter){
+  var ov = $("camAnswer");
+  if (!m){
+    ov.classList.remove("show");
+    $("camHint").classList.remove("hidden");
+    return;
+  }
+  var q = m.q;
+  var ansOpt = q.opts.filter(function(o){ return o.k === q.ans; })[0] || { t: "" };
+  var letter = paperLetter || q.ans;
+  $("caLetter").textContent = letter;
+  $("caText").textContent = ansOpt.t;
+  $("caNote").textContent = paperLetter && paperLetter !== q.ans
+    ? "Trên đề chọn " + paperLetter + " · Đáp án gốc " + q.ans
+    : "";
+  ov.classList.add("show");
+  $("camHint").classList.add("hidden");
+  $("scanResults").innerHTML = "";
+  $("scanResults").appendChild(resultCard(m, paperLetter));
+}
+
 async function scanTick(){
   if (!camOn || ocrBusy) return;
   var sig = frameSignature();
@@ -516,16 +601,18 @@ async function scanTick(){
     var text = await recognize(url);
     var ms = findMatches(text, 3);
     if (ms.length && ms[0].score >= 0.25){
-      var key = ms[0].q.idx + ":" + Math.round(ms[0].score * 100);
+      var q = ms[0].q;
+      var ansOpt = q.opts.filter(function(o){ return o.k === q.ans; })[0] || { t: "" };
+      var pl = paperLetterFor(text, ansOpt.t);
+      var key = q.idx + ":" + Math.round(ms[0].score * 100) + ":" + (pl || q.ans);
       if (key !== lastResultKey){
         lastResultKey = key;
-        renderResults($("scanResults"), [ms[0]], "");
-        setScanStatus("Đã tìm thấy đáp án", "found");
-      } else {
-        setScanStatus("Đã tìm thấy đáp án", "found");
+        renderScanAnswer(ms[0], pl);
       }
+      setScanStatus("Đã tìm thấy đáp án", "found");
     } else {
       lastResultKey = "";
+      renderScanAnswer(null);
       renderResults($("scanResults"), [], "Không nhận diện được câu hỏi. Đưa camera lại gần hơn và giữ máy yên.");
       setScanStatus("Không nhận diện được — đưa camera lại gần câu hỏi", "none");
     }
@@ -550,10 +637,14 @@ $("fileInput").addEventListener("change", function(){
       recognize(prepImage(im)).then(function(text){
         var ms = findMatches(text, 3);
         if (ms.length && ms[0].score >= 0.25){
-          lastResultKey = ms[0].q.idx + ":" + Math.round(ms[0].score * 100);
-          renderResults($("scanResults"), [ms[0]], "");
+          var q = ms[0].q;
+          var ansOpt = q.opts.filter(function(o){ return o.k === q.ans; })[0] || { t: "" };
+          var pl = paperLetterFor(text, ansOpt.t);
+          lastResultKey = q.idx + ":" + Math.round(ms[0].score * 100) + ":" + (pl || q.ans);
+          renderScanAnswer(ms[0], pl);
           setScanStatus("Đã tìm thấy đáp án", "found");
         } else {
+          renderScanAnswer(null);
           renderResults($("scanResults"), [], "Không nhận diện được câu hỏi trong ảnh. Thử ảnh khác rõ hơn.");
           setScanStatus("Không nhận diện được câu hỏi trong ảnh", "none");
         }
